@@ -1,0 +1,594 @@
+<?php 
+// $ID$
+
+
+/**
+* Implementation of hook_schema_alter(). We alter $schema by reference.
+*
+* @param $schema
+* The system-wide schema collected by drupal_get_schema().
+*/
+
+
+function morse_schema_alter(&$schema) {
+// Add field to existing schema.
+$schema['users']['fields']['pblevel'] = array(
+	'type' => 'int',
+	'unsigned' => TRUE,
+	'not null' => TRUE,
+	'default' => 1,
+	'description' => t('User Current Problem Level'),
+	);
+
+$schema['users']['fields']['tries'] = array(
+	'type' => 'int',
+	'unsigned' => TRUE,
+	'not null' => TRUE,
+	'default' => 0,
+	'description' => t('User Tries for Current Problem Level'),
+	);
+
+$schema['users']['fields']['pbtimestamp'] = array(
+	'type' => 'int',
+	'unsigned' => TRUE,
+	'not null' => TRUE,
+	'default' => time(),
+	'description' => t('User timestamp for last solved problem'),
+	);	
+}
+
+
+function morse_user($op, &$edit, &$account, $category = NULL) {
+	switch($op) {
+		// $user object has been created and is given to us as $account parameter.
+		case 'insert':
+			db_query('UPDATE {users} SET pbtimestamp = %d WHERE uid = %d', time(), $account->uid);
+			
+		case 'load':
+			
+		// Add the current problem level
+		$result = db_query("SELECT pblevel,tries from {users} WHERE uid = %d", $account->uid);
+		$array = db_fetch_array($result);
+		$account->pblevel = $array['pblevel'];
+		$account->tries = $array['tries'];
+		break;
+		
+		// 'My account' page is being created.
+		case 'view':
+		
+		if( user_access('access questions') ) {
+		
+		$is_problem_there = db_result(db_query('SELECT COUNT(pbid) FROM {morse} WHERE pbid = %d', $account->pblevel));
+		$rem_attempts =db_result(db_query('SELECT tries FROM {morse} WHERE pbid = %d', $account->pblevel))-$account->tries;
+		
+		$account->content['morse'] = array(
+		'#type' => 'user_profile_category',
+		'#title' => t('Morse'),
+		'#weight' => -10,
+		);
+		// Add a field displaying current number of problem
+		$account->content['morse']['problem_level'] = array(
+		'#type' => 'user_profile_item',
+		'#title' => t('Current Problem Level'),
+		'#value' => $account->pblevel >= variable_get('morse_max_level', 10)+1 ? t('Congratulations!! You have completed morse') : $account->pblevel,
+		'#attributes' => array('class' => 'problem_level'),
+		'#weight' => 10,
+		);
+		
+		$account->content['morse']['problem_tries'] = array(
+		'#type' => 'user_profile_item',
+		'#title' => t('Remaining Attempts'),
+		'#value' => !$is_problem_there ? t('No Problem is Associated with Your Current Level. Please Wait for Updates ') :($rem_attempts >0 ? $rem_attempts : t('No Remaining attempts. You are out of the competition')),
+		
+		'#attributes' => array('class' => 'problem_tries'),
+		'#weight' => 10,
+		);
+		
+		$account->content['morse']['current_rank'] = array(
+		'#type' => 'user_profile_item',
+		'#title' => t('Current Rank'),
+		'#value' => morse_my_rank($account->uid, $account->login),
+		'#attributes' => array('class' => 'current_rank'),
+		'#weight' => 10,
+		);
+
+		}
+
+		break;
+	}
+}
+
+
+/*
+function custmoize_call()
+{
+	$ans= l(t('first'),"node/1");
+	$ans= $ans.'<br/>'.l(t('second'),"node/2");
+	return $ans;
+}
+
+*/
+
+			
+/**
+ * Implementation of hook_node_info().
+ */
+ 
+function morse_node_info() {
+	//We are only defining one node type, type 'morse' :)
+	//We return an array since a module can define multiple node types.
+	
+	return array(
+		'morse' => array(
+			'name' => t('Morse Problem'), //Mandatory
+			'module' => 'morse',  //Mandatory
+			'description' => t('Add a new problem to Morse'), //Mandatory
+			'has_title' => TRUE,
+			'title_label' => t('Problem Title'),
+			'has_body' => TRUE,
+			'body_label' => t('Morsed Problem'),
+			'min_word_count' => 4,
+			'locked' => FALSE
+		)
+	);
+}
+/**
+ * Implementation of hook_perm().
+ */
+function morse_perm() {
+	return array('access questions');
+}
+
+/**
+* Implementation of hook_menu().
+*/
+function morse_menu() {
+
+	// Navigation Menu 
+	$items['morse'] = array(
+		'title' => 'My Morse',
+		'page callback' => 'morse_main',
+		'access arguments' => array('access questions'),
+		'type' => MENU_NORMAL_ITEM,
+		'weight' => 5,
+	);
+	
+	$items['ranks'] = array(
+		'title' => 'Morse Ranks',
+		'page callback' => 'morse_rank',
+		'access arguments' => array('access questions'),
+		'type' => MENU_NORMAL_ITEM,
+		'weight' => 6,
+	);
+
+		
+// Administration Section
+$items['admin/settings/morse'] = array(
+	'title' => 'Morse',
+	'description' => 'Define Morse Node Status and Maximum Problem Level',
+	'page callback' => 'drupal_get_form',
+	'page arguments' => array('morse_admin_settings'),
+	'access arguments' => array('administer site configuration'),
+	'type' => MENU_NORMAL_ITEM,
+	'file' => 'morse.admin.inc',
+	);
+	return $items;
+}
+
+/**
+ * Implementation of hook_form().
+ */
+
+function morse_form($node) {
+	// When the input form for a particular node is generated
+	// This hook_form is called so we have to define explicitly form field here
+	// We should keep all metadata for this node type
+	// We use it for labeling title and body fields
+	// We defined all this in morse_node_info().
+	
+	$type = node_get_types('type', $node);
+	// if this form is for a pre stored node then...
+	$pblevel_set_for_this_node = isset($node->pblevel)? $node->pblevel : 0 ; 
+	
+	$form['title'] = array(
+		'#type' => 'textfield',
+		'#title' => check_plain($type->title_label),
+		'#required' => TRUE,
+		'#default_value' => $node->title,
+		'#weight' => -5,
+		'#maxlength' => 255,
+	);
+	$form['pblevel'] = array(
+		'#type' => 'select',
+		'#title' => t('Problem Level'),
+		'#required' => TRUE,
+		'#default_value' => isset($node->pblevel)? $node->pblevel : 0,
+		'#options' => morse_available_pb_levels($pblevel_set_for_this_node),
+	);
+	
+	$form['body_filter']['body'] = array(
+		'#type' => 'textarea',
+		'#title' => check_plain($type->body_label),
+		'#default_value' => $node->body,
+		'#rows' => 21,
+		'#required' => TRUE,
+	);
+	$form['body_filter']['filter'] = filter_form($node->format);
+	$form['answer'] = array(
+		'#type' => 'textfield',
+		'#title' => t('Problem Answer'),
+		'#required' => TRUE,
+		'#default_value' => isset($node->answer)? $node->answer : '',
+		'#maxlength' => 255,
+	);
+	$form['tries'] = array(
+		'#type' => 'textfield',
+		'#title' => t('Maximum Attempts'),
+		'#required' => TRUE,
+		'#default_value' => isset($node->tries)? $node->tries : variable_get('morse_max_tries', 40),
+		'#maxlength' => 255,
+	);
+
+	
+	return $form;
+}
+
+/**
+ * Implementation of hook_validate()
+ * [ It may be enforced on pblevel .. Let me see after insert operation ]
+ */
+ 
+/**
+ * Implementation of hook_insert().
+ */
+function morse_insert($node) {
+	db_query("INSERT INTO {morse} (nid,vid,pbid,answer,tries) VALUES (%d, %d, %d, '%s', %d)", $node->nid, $node->vid, $node->pblevel, $node->answer, $node->tries);
+}
+
+
+/**
+ * Implementation of hook_load().
+ */
+function morse_load($node) {
+	return db_fetch_object(db_query('SELECT pbid AS pblevel,answer,tries FROM {morse} WHERE vid = %d', $node->vid));
+}
+
+/**
+ * Implementation of hook_update().
+ */ 
+function morse_update($node) {
+	if($node->revision) {
+		// New revision. So we will treat it as a new record.
+		morse_insert($node);
+	}
+	else {
+		db_query("UPDATE {morse} SET pbid = '%d', answer = '%s', tries = '%d' WHERE vid = %d", $node->pblevel, $node->answer, $node->tries, $node->vid);
+	}
+}
+
+/**
+ * Implementation of hook_delete().
+ */
+function morse_delete(&$node) {
+	//Delete the related information we were saving for this node.
+	db_query('DELETE FROM {morse} WHERE nid = %d', $node -> nid);
+}
+
+/**
+ * Implementation of hook_view().
+ */
+function morse_view($node, $teaser = FALSE, $page = FALSE) {
+	global $user;
+	$rem_attempts = db_result(db_query('SELECT tries FROM {morse} WHERE pbid = %d', $user->pblevel))-db_result(db_query('SELECT tries FROM {users} WHERE uid = %d', $user->uid));
+	
+	// If $teaser is FALSE, the entire node is being displayed, so...
+	if(!$teaser) {
+		// First use drupal's default node view.
+		$node = node_prepare($node, $teaser);
+		
+		// Is Solved or not
+		if($user->pblevel > $node->pblevel) {
+			$node->is_solved = TRUE;
+		}
+		else {
+			$node->is_solved = FALSE;
+		}
+		
+		//We add the answer textfield
+		if($user->pblevel == $node->pblevel) {
+			if($rem_attempts == 0) {
+				drupal_set_message(t('No remaining attempts are there. You are out of the competition!'));
+			}
+			else {
+					$node->content['answer_form'] = array(
+						'#value' => drupal_get_form('answer_entry_form',$node),
+						'#weight' => 10
+					);
+			}
+			
+		}
+		
+	}
+	
+	// If $teaser is TRUE, node is being displayed as a teaser,
+	// such as on a node listing page. We omit everything in this case . .[ not sure properly ]
+	if($teaser) {
+		$node->$teaser = FALSE;
+	}
+	
+	return $node;
+	
+}
+
+/**
+ * Define the form for entering the answer text field
+ */
+ 
+function answer_entry_form($form_state,$node) {
+	
+	//define a fieldset.
+	$form['morse'] = array(
+		'#type' => 'fieldset',
+		'#title' => t('Solve this Morse'),
+
+	);
+	//define a textfield inside the fieldset.
+	$form['morse']['answer'] = array(
+		'#type' => 'textfield',
+		'#title' => t('After cracking the riddle you have this string'),
+		'#required' => TRUE,
+		'#default_value' => '',
+		'#weight' => -5,
+		'#maxlength' => 255,
+	);
+	//for convenience, save the node ID and VID.
+	
+	$form['morse']['nid'] = array(
+		'#type' => 'value',
+		'#value' => $node->nid,
+	);
+	
+	$form['morse']['vid'] = array(
+		'#type' => 'value',
+		'#value' => $node->vid,
+	);
+	
+	//define a submit function
+	
+	$form['morse']['submit'] = array(
+		'#type' => 'submit',
+		'#value' => t('Crack'),
+	);
+	
+	return $form;
+}
+
+/**
+ * Checking if the supplied answer string is right or wrong
+ */
+function answer_entry_form_validate($form, $form_state) {
+	global $user;
+	$answer = $form_state['values']['answer'];
+	$nid  = $form_state['values']['nid'];
+	$vid = $form_state['values']['vid'];
+	
+	//IF We are going to validate for reamining attempt <= 0[USER MAY ALSO USE UNFAIR MEANS] !! I can't understand the flow
+	$rem_attempts = db_result(db_query('SELECT tries FROM {morse} WHERE pbid = %d', $user->pblevel))-db_result(db_query('SELECT tries FROM {users} WHERE uid = %d', $user->uid));				
+	
+	if($rem_attempts <= 0 ){
+		drupal_set_message(t('No remaining attempts are there. You are out of the competition!'));
+	}
+	//
+	else {
+		$right_answer = db_result(db_query('SELECT answer FROM {morse} WHERE nid = %d AND vid = %d', $nid, $vid) );
+	
+		if($answer != $right_answer) {
+			db_query('UPDATE {users} SET tries=tries+1 WHERE uid = %d', $user->uid);
+			$rem_attempts = db_result(db_query('SELECT tries FROM {morse} WHERE pbid = %d', $user->pblevel))-db_result(db_query('SELECT tries FROM {users} WHERE uid = %d', $user->uid));		
+				if($rem_attempts <= 0 ){
+					drupal_set_message(t('No remaining attempts are there. You are out of the competition!'));
+					form_set_error('answer', t('Riddle is Uncracked'));
+				}
+				else {
+					form_set_error('answer', t('Riddle is still Uncracked. Better read that again and try !') );
+					if($rem_attempts<=10)
+						drupal_set_message(t('Less remaining attempts are there. If no more attempts are there to hit then you will be out of this competition. So be careful...'));
+					drupal_set_message(t('Remaining attempts : @tr', array('@tr' => $rem_attempts )));
+			}
+		}
+	}
+
+
+}
+/**
+ * Handle submission of the annotation form and saving
+ * of the data to the database
+ */
+ 
+function answer_entry_form_submit($form, $form_state) {
+	// as we have to make changes in pblevel pointer so .. user object is available
+	global $user;
+	
+	$answer = $form_state['values']['note'];
+	$nid  = $form_state['values']['nid'];
+	$vid = $form_state['values']['vid'];
+	
+	//riddle solved so...
+	db_query('UPDATE {users} SET pblevel=pblevel+1, tries= %d, pbtimestamp = %d WHERE uid = %d', 0, time(), $user->uid);
+	drupal_set_message(t('Congratulations!! You have solved this riddle. Next one is waiting for you ').l(t('here'),'morse'));
+	
+	
+}
+	
+/**
+ * Implementation of hook_access().
+ * Trying to confine morse node view depending on user's pblevel
+ */
+ 
+function morse_access($op, $node, $account) {
+	
+	//also need to block undocumented (with pbid = 0 ) morse nodes..
+	$pbid_for_this_node = db_result(db_query('SELECT pbid FROM {morse} WHERE nid = %d', $node->nid));
+	$morse_status = variable_get('morse_status', 0 );
+
+	switch($op) {
+		// since i have not used hook_perm to define other permissions so
+		// for regular users only this operation is possible
+		// for super user this check is skipped
+		// i came to know that this approach doesn't work in teaser view !
+		
+		case 'view' :
+			$node->teaser = FALSE; // i am not getting properly 
+			if($account->uid!=0 && $account->pblevel >= $node->pblevel && $pbid_for_this_node!=0 && $morse_status !=1 && user_access('access questions') )
+				return TRUE;
+			else
+				return FALSE;
+		}
+}
+	
+/**
+ * Custom Morse Function Section
+ */
+ 
+function morse_available_pb_levels($pblevel_attached_to_this_node) {
+	$unassigned_pbids = array();
+	$assigned_pbids = array();
+	$morse_max_level = variable_get('morse_max_level', 10 );
+	
+	//fetching assigned pbids
+	$result = db_query("SELECT pbid FROM {morse}");
+	while($arr = db_fetch_array($result))
+		$assigned_pbids[] = $arr['pbid'];
+		
+	//deciding unassigned pbids
+	$unassigned_pbids[0] = 0; // for undocumented problems	
+	for($i = 1; $i <= $morse_max_level ; $i++)
+	{
+		if(!in_array($i,$assigned_pbids) || $i==$pblevel_attached_to_this_node)
+			$unassigned_pbids[$i] = $i;
+	}
+	
+	// if setting is so changed that the pblevel attached to this node is greater than maximum level then...
+	if($pblevel_attached_to_this_node > $morse_max_level)
+		$unassigned_pbids[$pblevel_attached_to_this_node] = $pblevel_attached_to_this_node ;
+
+	return $unassigned_pbids;
+	
+}
+
+function morse_main() {
+	
+	global $user;
+	$morse_max_level = variable_get('morse_max_level', 10 );
+	$morse_status = variable_get('morse_status', 0 );
+	$result = db_query('SELECT DISTINCT nid,pbid FROM {morse} ORDER BY pbid');
+	$count = 0;
+	$pbid_array = array();
+	
+	// if morse is online then view problems
+	// if morse is offline then admin can still by pass it . . due to the nature of hook_access().
+	$output = '';
+	$rows = array();
+	
+	if($morse_status != 1) {
+		while($array = db_fetch_array($result) ) {
+			if($array['pbid'] <= $user->pblevel && $array['pbid']!=0 && $array['pbid'] <= $morse_max_level ) {
+		
+				$pbid_array[] = (int)$array['pbid'];
+				$count++;
+				//define menu subitem for each such nid associated with this pbid
+				$title_for_this_nid = db_result(db_query('SELECT title FROM {node} WHERE nid = %d', $array['nid'] ));
+			 $rows[] = array(
+				"{$count}. &nbsp&nbsp ".l(t("{$title_for_this_nid}"),"node/{$array['nid']}"),
+	    );				
+			}
+		}
+		
+		$header = array();
+	  if (!empty($rows)) {
+    	$output .= theme('table', $header, $rows);
+	  }
+
+		if($user->pblevel >= $morse_max_level+1)
+			$output = $output." <b> You Have Completed Morse !!! Congratulations </b> ";
+		else {
+			if(!in_array($user->pblevel, $pbid_array))
+				$output = $output."<b> No Problem is Associated with Your Current Level. Please Wait for Updates </b> ";
+		}
+	}
+	else {
+		$output = $output."<b> Morse is Offline now </b> ";
+	}
+
+	return $output;
+}
+
+
+function morse_rank() {
+
+	global $user;
+	$max_record_per_page = 5;
+
+	if(isset($_GET['page'])) {
+			$rank_count = (((int)$_GET['page'])*$max_record_per_page);
+	}
+	else
+		$rank_count = 0;
+	
+	$sql = 'SELECT uid,name,pblevel,tries FROM {users} WHERE uid!= %d AND uid!=%d AND login!=%d ORDER BY pblevel DESC,pbtimestamp ASC ' ;
+	$pager_num = 0; // This is the first pager on this page. We number it 0.
+	$result = pager_query(db_rewrite_sql($sql), $max_record_per_page, $pager_num, NULL,0,1,0);
+	
+	//theme_table
+	$output = '';
+	$rows = array();
+	while($array = db_fetch_array($result) ) {
+			$rank_count ++;
+	    $rows[] = array(
+      check_plain($rank_count),
+      l(t("{$array['name']}"),"user/{$array['uid']}"),
+      check_plain($array['pblevel'])
+    );
+	}
+  $header = array(
+    t('Rank'),
+    t('User'),
+    t('Solving')
+   );
+
+  if (!empty($rows)) {
+    $output .= theme('table', $header, $rows);
+  }
+  else {
+    $output .= t('Morse has just been started. Nobody has registered yet, you may be the first one :)');
+  }
+  //theme_table end
+  
+	// Add links to remaining pages of results.
+	$output = $output.theme('pager', NULL, $max_record_per_page, $pager_num);
+
+	
+	return $output;
+}
+
+
+function morse_my_rank($user_uid,$user_login) {
+	
+	if($user_uid == 1 )
+		return t('You are Morse Administrator');
+// patch I
+	if($user_login == 0)
+		return t('User has never logged in !');
+// patch I end
+	$result = db_query('SELECT uid,name,pblevel,tries FROM {users} WHERE uid!= %d AND uid!=%d AND login!=%d  ORDER BY pblevel DESC,pbtimestamp ASC',0,1,0);
+	$count = 0;
+	while($array = db_fetch_array($result) ) {
+			$count ++;
+			if($array['uid'] == $user_uid )
+				break;
+				
+	}
+	
+	return $count;
+}
+			

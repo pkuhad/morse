@@ -1,0 +1,131 @@
+<?php
+// $ID$
+
+/**
+* Implementation of hook_install().
+*/
+function morse_install() {
+
+	$field = array(
+		'type' => 'int',
+		'unsigned' => TRUE,
+		'not null' => TRUE,
+		'default' => 1,
+		'initial' => 1, // Sets initial value for preexisting nodes.
+		'description' => t('User Current Problem Level'),
+	);
+
+	// Create a regular index called 'pblevel' on the field named 'pblevel'.
+	$keys['indexes'] = array('pblevel' => array('pblevel') );
+	$ret = array(); // Results of the SQL calls will be stored here.
+	
+	db_add_field($ret, 'users', 'pblevel', $field, $keys);
+	
+  // tries
+	$field = array(
+		'type' => 'int',
+		'unsigned' => TRUE,
+		'not null' => TRUE,
+		'default' => 0,
+		'initial' => 0, // Sets initial value for preexisting nodes.
+		'description' => t('User Tries for Current Problem Level'),
+	);
+	$ret = array(); // Results of the SQL calls will be stored here.
+	
+	db_add_field($ret, 'users', 'tries', $field);
+
+  // timestamp
+	$field = array(
+		'type' => 'int',
+		'unsigned' => TRUE,
+		'not null' => TRUE,
+		'default' => time(),
+		'initial' => time(), // Sets initial value for preexisting nodes.
+		'description' => t('User timestamp for last solved problem'),
+	);
+	$ret = array(); // Results of the SQL calls will be stored here.
+	
+	db_add_field($ret, 'users', 'pbtimestamp', $field);
+
+
+	
+	//Schema Installation
+	drupal_install_schema('morse');
+	
+}
+
+/**
+ * Implementation of hook_uninstall().
+ */
+function morse_uninstall() {
+	//Revert users table
+	db_query("ALTER TABLE {users}  DROP pblevel,  DROP tries,  DROP pbtimestamp");
+	
+	// Delte node items
+
+	$result = db_query("SELECT DISTINCT nid from {morse}");
+	
+	while($array = db_fetch_array($result)) {
+
+	db_query("DELETE FROM {node} WHERE nid = %d", $array['nid']);
+	db_query("DELETE FROM {node_revisions} WHERE nid = %d", $array['nid']);
+	
+	}
+
+	drupal_uninstall_schema('morse');
+}
+
+/**
+ * Implementation of hook_schema().
+ */
+ 
+function morse_schema() {
+	$schema['morse'] = array(
+		'description' => t("Stores Problems with their answers"),
+		'fields' => array(
+			'nid' => array(
+				'type' => 'int',
+				'unsigned' => TRUE,
+				'not null' => TRUE,
+				'default' => 0,
+				'description' => t("The morse's {node}.nid"),
+				),
+			'vid' => array(
+				'type' => 'int',
+				'unsigned' => TRUE,
+				'not null' => TRUE,
+				'default' => 0,
+				'description' => t("The morse's {node_revisions}.vid "),
+				),
+			'pbid' => array(
+				'type' => 'int',
+				'unsigned' => TRUE,
+				'not null' => TRUE,
+				'default' => 0,
+				'description' => t("The morse problem level "),
+				),
+			'answer' => array(
+      	'description' => t('The morse problem answer'),
+	      'type' => 'varchar',
+  	    'length' => '255',
+    	  'not null' => TRUE,
+      	'default' => 'NOT_DEFINED',
+		    ),	
+			'tries' => array(
+				'type' => 'int',
+				'unsigned' => TRUE,
+				'not null' => TRUE,
+				'default' => 40,
+				'description' => t("Maximum attempts particular for this problem"),
+				),
+			),
+			'primary key' => array('nid', 'vid'),
+			'unique keys' => array('vid' => array('vid')),
+			'indexes' => array('nid' => array('nid') ),
+		);
+		
+		return $schema;
+	}
+			
+
+

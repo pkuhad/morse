@@ -1,0 +1,5 @@
+; $Id$
+name = Morse
+description = To Simulate online questioning for Sakshama Gn 09
+core = 6.x
+package = Sakshama
