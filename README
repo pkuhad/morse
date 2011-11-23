@@ -1,0 +1,19 @@
+morse' is the online event of Sakshama : The annual technical fest of Engineering College Bikaner.
+
+Sakshama's first online event was introduced in year 2009.In this year we designed this event on a cartoon character based theme. Site was on drupal framework and 'morse' was its engine module. Though you will have to concern more challenges while putting your online event idea into work but my code will solve your most of the problem using drupal. If you have any concern about extending it do let me know :)
+
+
+
+This module :
+
+1. Creates a 'morse problem' content type. You can associate this content type with a problem level.If it is associated with level 0 then it would be invisible.
+
+2. By invisible problem I mean it has been created to be later associated with any level number.
+
+3. You can configure maximum number of attempts for any problem. If user exceeds problem attempts one set to be out of the competition.
+
+4. Module provides level and rank information on user profile page. A rank page is also provided in navigation menu with pager.
+
+5. An answer box is there while viewing the content type 'morse problem' and answer matching is based on strict string matching.If a user solves a level one's problem level is incremented.
+
+6. On the configuration page of this module you can set the maximum number of problems and online/offline status of your 'morse problems' 
